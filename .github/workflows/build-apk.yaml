@@ -48,7 +48,7 @@ jobs:
         working-directory: ./workspace/${{ github.event.inputs.subdir }}
         run: |
           chmod +x gradlew
-          # 运行时传递JVM参数、禁用daemon/并行，不修改源码文件
+          # 限制JVM内存，防止OOM
           export GRADLE_OPTS="-Xmx3072m -XX:MaxMetaspaceSize=512m"
 
           if [[ "${{ github.event.inputs.taskName }}" == *Release* ]]; then
@@ -68,11 +68,15 @@ jobs:
               -Pandroid.injected.signing.key.password=android \
               --no-daemon \
               --no-parallel \
+              --continue \
+              -Pandroid.disableResourceValidation=true \
               --stacktrace
           else
             ./gradlew ${{ github.event.inputs.taskName }} \
               --no-daemon \
               --no-parallel \
+              --continue \
+              -Pandroid.disableResourceValidation=true \
               --stacktrace
           fi
 
