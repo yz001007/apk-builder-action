@@ -29,7 +29,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 360
-    # 限制运行器并发，单实例运行
     concurrency:
       group: ${{ github.workflow }}-${{ github.run_id }}
       cancel-in-progress: false
@@ -41,30 +40,24 @@ jobs:
           distribution: "temurin"
           java-version: ${{ github.event.inputs.jdkVersion }}
 
-      - name: Clone project (with submodules)
+      - name: Clone pure source (with submodules)
         run: |
           if [[ -z "${{ github.event.inputs.branchName }}" ]]; then
             git clone --recurse-submodules --depth=1 ${{ github.event.inputs.repository }} workspace
           else
             git clone --recurse-submodules --depth=1 --branch ${{ github.event.inputs.branchName }} workspace
           fi
-
-      # 写入临时配置：强制单线程、低内存、关闭所有加速功能（专治资源跑满失联）
-      - name: Apply low-load Gradle config
-        working-directory: ./workspace/${{ github.event.inputs.subdir }}
-        run: |
-          cat > gradle.properties << 'EOF'
-          org.gradle.daemon=false
-          org.gradle.parallel=false
-          org.gradle.workers.max=1
-          org.gradle.configureondemand=false
-          org.gradle.jvmargs=-Xmx2048m -Xms512m -XX:MaxMetaspaceSize=384m
-          EOF
+          # 强制还原源码，清除一切改动
+          cd workspace
+          git reset --hard HEAD
+          git clean -fd
 
       - name: Build APK
         working-directory: ./workspace/${{ github.event.inputs.subdir }}
         run: |
           chmod +x gradlew
+          # 仅通过环境变量控内存，不修改项目文件
+          export GRADLE_OPTS="-Xmx2048m -Xms512m -XX:MaxMetaspaceSize=384m"
 
           if [[ "${{ github.event.inputs.taskName }}" == *Release* ]]; then
             echo "Creating debug keystore..."
@@ -82,18 +75,16 @@ jobs:
               --no-daemon \
               --no-parallel \
               --max-workers=1 \
-              -Pandroid.disableResourceValidation=true \
               --stacktrace
           else
             ./gradlew ${{ github.event.inputs.taskName }} \
               --no-daemon \
               --no-parallel \
               --max-workers=1 \
-              -Pandroid.disableResourceValidation=true \
               --stacktrace
           fi
 
-      - name: Upload the APK artifact with 1 day retention
+      - name: Upload APK
         uses: actions/upload-artifact@v6
         with:
           path: workspace/**/*.apk
