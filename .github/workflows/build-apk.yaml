@@ -28,7 +28,12 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 360
+    # 限制运行器并发，单实例运行
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.run_id }}
+      cancel-in-progress: false
+
     steps:
       - name: Setup JDK
         uses: actions/setup-java@v5
@@ -36,7 +41,7 @@ jobs:
           distribution: "temurin"
           java-version: ${{ github.event.inputs.jdkVersion }}
 
-      - name: Clone project
+      - name: Clone project (with submodules)
         run: |
           if [[ -z "${{ github.event.inputs.branchName }}" ]]; then
             git clone --recurse-submodules --depth=1 ${{ github.event.inputs.repository }} workspace
@@ -44,18 +49,26 @@ jobs:
             git clone --recurse-submodules --depth=1 --branch ${{ github.event.inputs.branchName }} workspace
           fi
 
+      # 写入临时配置：强制单线程、低内存、关闭所有加速功能（专治资源跑满失联）
+      - name: Apply low-load Gradle config
+        working-directory: ./workspace/${{ github.event.inputs.subdir }}
+        run: |
+          cat > gradle.properties << 'EOF'
+          org.gradle.daemon=false
+          org.gradle.parallel=false
+          org.gradle.workers.max=1
+          org.gradle.configureondemand=false
+          org.gradle.jvmargs=-Xmx2048m -Xms512m -XX:MaxMetaspaceSize=384m
+          EOF
+
       - name: Build APK
         working-directory: ./workspace/${{ github.event.inputs.subdir }}
         run: |
           chmod +x gradlew
-          # 限制JVM内存，防止OOM
-          export GRADLE_OPTS="-Xmx3072m -XX:MaxMetaspaceSize=512m"
 
           if [[ "${{ github.event.inputs.taskName }}" == *Release* ]]; then
-            echo "Task contains 'Release', attempting to sign a release build with a debug key."
-
+            echo "Creating debug keystore..."
             if [ ! -f "$HOME/.android/debug.keystore" ]; then
-              echo "Debug keystore not found. Creating one..."
               keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "C=US, O=Android, CN=Android Debug"
               mkdir -p $HOME/.android
               mv debug.keystore $HOME/.android/debug.keystore
@@ -68,14 +81,14 @@ jobs:
               -Pandroid.injected.signing.key.password=android \
               --no-daemon \
               --no-parallel \
-              --continue \
+              --max-workers=1 \
               -Pandroid.disableResourceValidation=true \
               --stacktrace
           else
             ./gradlew ${{ github.event.inputs.taskName }} \
               --no-daemon \
               --no-parallel \
-              --continue \
+              --max-workers=1 \
               -Pandroid.disableResourceValidation=true \
               --stacktrace
           fi
