@@ -28,6 +28,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest # Android SDK is built into this image
+    timeout-minutes: 90  # 延长超时到90分钟，避免编译中途被取消
     steps:
       - name: Setup JDK
         uses: actions/setup-java@v5
@@ -42,7 +43,18 @@ jobs:
           else
             git clone --recurse-submodules --depth=1 --branch ${{ github.event.inputs.branchName }} ${{ github.event.inputs.repository }} workspace
           fi
-
+          
+      # 新增：写入gradle配置，限制内存、关闭并行/daemon，解决卡死、被取消
+      - name: Optimize Gradle config for large project
+        working-directory: ./workspace/${{ github.event.inputs.subdir }}
+        run: |
+          cat > gradle.properties << 'EOF'
+          org.gradle.daemon=false
+          org.gradle.parallel=false
+          org.gradle.configureondemand=false
+          org.gradle.jvmargs=-Xmx3072m -XX:MaxMetaspaceSize=512m
+          EOF
+          
       - name: Build APK
         working-directory: ./workspace/${{ github.event.inputs.subdir }}
         run: |
