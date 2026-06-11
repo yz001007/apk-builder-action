@@ -7,7 +7,7 @@ on:
       repository:
         description: "Git repository URL"
         required: true
-        default: "https://github.com/android/sunflower"
+        default: "https://github.com/nightscout/AndroidAPS.git"
       branchName:
         description: "Git branch name [Optional]"
         required: false
@@ -19,7 +19,7 @@ on:
       jdkVersion:
         description: "OpenJDK version: 8, 17, 21, 25, …"
         required: false
-        default: "17"
+        default: "21"
       taskName:
         description: "build.gradle task name: assembleDebug, assembleRelease, etc."
         required: false
@@ -27,8 +27,8 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest # Android SDK is built into this image
-    timeout-minutes: 90  # 延长超时到90分钟，避免编译中途被取消
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - name: Setup JDK
         uses: actions/setup-java@v5
@@ -41,34 +41,22 @@ jobs:
           if [[ -z "${{ github.event.inputs.branchName }}" ]]; then
             git clone --recurse-submodules --depth=1 ${{ github.event.inputs.repository }} workspace
           else
-            git clone --recurse-submodules --depth=1 --branch ${{ github.event.inputs.branchName }} ${{ github.event.inputs.repository }} workspace
+            git clone --recurse-submodules --depth=1 --branch ${{ github.event.inputs.branchName }} workspace
           fi
-          
-      # 新增：写入gradle配置，限制内存、关闭并行/daemon，解决卡死、被取消
-      - name: Optimize Gradle config for large project
-        working-directory: ./workspace/${{ github.event.inputs.subdir }}
-        run: |
-          cat > gradle.properties << 'EOF'
-          org.gradle.daemon=false
-          org.gradle.parallel=false
-          org.gradle.configureondemand=false
-          org.gradle.jvmargs=-Xmx3072m -XX:MaxMetaspaceSize=512m
-          EOF
-          
+
       - name: Build APK
         working-directory: ./workspace/${{ github.event.inputs.subdir }}
         run: |
-          if [ ! -f "gradlew" ]; then gradle wrapper; fi
           chmod +x gradlew
+          # 运行时传递JVM参数、禁用daemon/并行，不修改源码文件
+          export GRADLE_OPTS="-Xmx3072m -XX:MaxMetaspaceSize=512m"
 
           if [[ "${{ github.event.inputs.taskName }}" == *Release* ]]; then
             echo "Task contains 'Release', attempting to sign a release build with a debug key."
 
             if [ ! -f "$HOME/.android/debug.keystore" ]; then
               echo "Debug keystore not found. Creating one..."
-
               keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "C=US, O=Android, CN=Android Debug"
-
               mkdir -p $HOME/.android
               mv debug.keystore $HOME/.android/debug.keystore
             fi
@@ -78,9 +66,14 @@ jobs:
               -Pandroid.injected.signing.store.password=android \
               -Pandroid.injected.signing.key.alias=androiddebugkey \
               -Pandroid.injected.signing.key.password=android \
+              --no-daemon \
+              --no-parallel \
               --stacktrace
           else
-            ./gradlew ${{ github.event.inputs.taskName }} --stacktrace
+            ./gradlew ${{ github.event.inputs.taskName }} \
+              --no-daemon \
+              --no-parallel \
+              --stacktrace
           fi
 
       - name: Upload the APK artifact with 1 day retention
